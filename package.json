@@ -1,12 +1,14 @@
 {
   "name": "insta-scraper-craftwave",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "クラフトビール情報スクレイパー（Render 用）",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.0"
+    "express": "^4.19.0",
+    "node-fetch": "^3.4.0"
   }
 }
