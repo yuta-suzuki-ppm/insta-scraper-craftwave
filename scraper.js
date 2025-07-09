@@ -1,4 +1,4 @@
-// scraper.js
+// scraper.js 〈今回の完成版〉
 import { load } from 'cheerio';
 import axios from 'axios';
 
@@ -29,6 +29,16 @@ export const categories = {
 };
 
 //
+// ---------- 追加：ノイズを弾く NG ドメイン ----------
+// ここに「もう見たくないサイト」を足すだけで除外できます
+//
+const NG_DOMAINS = [
+  'prtimes.jp',
+  'news.yahoo.co.jp',
+  'food.biglobe.ne.jp'   // ← さっきの EC サイト
+];
+
+//
 // ---------- 2) Google News RSS で Web 収集 ----------
 //
 const rssURL = q =>
@@ -45,8 +55,17 @@ async function fetchNewsByCategory(catId) {
       const $ = load(xml, { xmlMode: true });
       $('item').each((_, el) => {
         const title = $(el).find('title').text();
-        const link = $(el).find('link').text();
-        const pub = new Date($(el).find('pubDate').text()).getTime();
+        const link  = $(el).find('link').text();
+        const pub   = new Date($(el).find('pubDate').text()).getTime();
+
+        // -------- フィルタ１：NG ドメインを除外 --------
+        if (NG_DOMAINS.some(d => link.includes(d))) return;
+
+        // -------- フィルタ２：タイトルに全キーワードが入るか再確認 --------
+        const low = title.toLowerCase();
+        const ok  = k.toLowerCase().split(' ').every(w => low.includes(w));
+        if (!ok) return;
+
         if (pub > yesterday) out.push({ cat: catId, title, url: link });
       });
     } catch (e) {
@@ -58,20 +77,19 @@ async function fetchNewsByCategory(catId) {
 
 //
 // ---------- 3) Instagram (ハッシュタグ) 収集 ----------
-//    ※Graph API トークンを環境変数 IG_TOKEN / IG_BUS_ID に設定してから使ってください
 //
-const IG_TOKEN = process.env.IG_TOKEN || '';
+const IG_TOKEN  = process.env.IG_TOKEN  || '';
 const IG_BUS_ID = process.env.IG_BUS_ID || '';
 
 async function fetchInstaByCategory(catId) {
-  if (!IG_TOKEN || !IG_BUS_ID) return []; // トークン未設定ならスキップ
+  if (!IG_TOKEN || !IG_BUS_ID) return [];
   const { tags } = categories[catId];
-  let out = [];
   const yesterday = Date.now() - 24 * 60 * 60 * 1000;
+  let out = [];
 
   for (const tag of tags) {
     try {
-      // 1. ハッシュタグID検索
+      // 1) ハッシュタグID
       const { data: tagSearch } = await axios.get(
         'https://graph.facebook.com/v19.0/ig_hashtag_search',
         { params: { user_id: IG_BUS_ID, q: tag, access_token: IG_TOKEN } }
@@ -79,7 +97,7 @@ async function fetchInstaByCategory(catId) {
       const tagId = tagSearch.data?.[0]?.id;
       if (!tagId) continue;
 
-      // 2. 最新メディア
+      // 2) 最新メディア
       const { data: media } = await axios.get(
         `https://graph.facebook.com/v19.0/${tagId}/recent_media`,
         {
