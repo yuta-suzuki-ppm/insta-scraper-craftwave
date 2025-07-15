@@ -1,4 +1,4 @@
-// scraper.js 〈今回の完成版〉
+// scraper.js 〈重複タイトルもはじく最新版〉
 import { load } from 'cheerio';
 import axios from 'axios';
 
@@ -30,12 +30,11 @@ export const categories = {
 
 //
 // ---------- 追加：ノイズを弾く NG ドメイン ----------
-// ここに「もう見たくないサイト」を足すだけで除外できます
 //
 const NG_DOMAINS = [
   'prtimes.jp',
   'news.yahoo.co.jp',
-  'food.biglobe.ne.jp'   // ← さっきの EC サイト
+  'food.biglobe.ne.jp'
 ];
 
 //
@@ -58,10 +57,10 @@ async function fetchNewsByCategory(catId) {
         const link  = $(el).find('link').text();
         const pub   = new Date($(el).find('pubDate').text()).getTime();
 
-        // -------- フィルタ１：NG ドメインを除外 --------
+        // フィルタ１：NG ドメイン除外
         if (NG_DOMAINS.some(d => link.includes(d))) return;
 
-        // -------- フィルタ２：タイトルに全キーワードが入るか再確認 --------
+        // フィルタ２：タイトル再チェック（AND）
         const low = title.toLowerCase();
         const ok  = k.toLowerCase().split(' ').every(w => low.includes(w));
         if (!ok) return;
@@ -89,7 +88,7 @@ async function fetchInstaByCategory(catId) {
 
   for (const tag of tags) {
     try {
-      // 1) ハッシュタグID
+      // 1) ハッシュタグ ID
       const { data: tagSearch } = await axios.get(
         'https://graph.facebook.com/v19.0/ig_hashtag_search',
         { params: { user_id: IG_BUS_ID, q: tag, access_token: IG_TOKEN } }
@@ -126,7 +125,7 @@ async function fetchInstaByCategory(catId) {
 }
 
 //
-// ---------- 4) エントリーポイント ----------
+// ---------- 4) エントリーポイント（まとめて返す） ----------
 //
 export async function getCraftwaveData() {
   let results = [];
@@ -136,7 +135,24 @@ export async function getCraftwaveData() {
     results.push(...await fetchInstaByCategory(catId));
   }
 
-  // 重複除去 (url でユニーク)
-  const uniq = Array.from(new Map(results.map(o => [o.url, o])).values());
-  return uniq.slice(0, 100);
+  // ① URL 重複カット
+  let uniq = Array.from(new Map(results.map(o => [o.url, o])).values());
+
+  // ② タイトルがほぼ同じ記事を 1 本だけ残す
+  const norm = str =>
+    str
+      .toLowerCase()
+      .replace(/[【\[\(（「『].*?[】\]\)）」』]/g, '') // カッコ内を削除
+      .replace(/\s+/g, '');                             // スペース削除
+
+  const seen = new Set();
+  const final = [];
+  for (const item of uniq) {
+    const key = norm(item.title).slice(0, 30);          // 先頭30文字で比較
+    if (seen.has(key)) continue;                        // もう見たらスキップ
+    seen.add(key);
+    final.push(item);
+  }
+
+  return final.slice(0, 100); // 最大100件返す
 }
