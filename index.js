@@ -1,5 +1,5 @@
 import express from 'express';
-import { getCraftwaveData } from './scraper.js';
+import { getCraftwaveData, checkFeeds } from './scraper.js';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -15,6 +15,15 @@ app.get('/api/craftwave', async (_, res) => {
     res.json(data);
   } catch (e) {
     console.error('[api error]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ブルワリー公式フィードの動作確認用（LINE配信とは無関係）
+app.get('/api/feeds-check', async (_, res) => {
+  try {
+    res.json(await checkFeeds());
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

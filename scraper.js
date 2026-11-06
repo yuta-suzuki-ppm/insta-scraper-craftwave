@@ -228,9 +228,29 @@ export const SITE_SOURCES = [
   { site: 'coedobrewery.com',   name: 'コエドブルワリー' }
 ];
 
+//   Shopify のブログは /blogs/<ブログ名>.atom、WordPress は /feed/ でフィードが出る
+//   動くかどうかは /api/feeds-check で確認できる（配信には影響しない）
 export const FEEDS = [
-  // 例：{ url: 'https://example-brewery.jp/feed', name: '〇〇ブルワリー' },
+  { url: 'https://kaiganbrewery.com/blogs/news.atom',          name: 'KAIGAN BREWERY' },
+  { url: 'http://blacktidebrewing.com/feed/',                   name: 'BLACK TIDE BREWING' },
+  { url: 'https://www.westcoastbrewing.jp/news/feed/',          name: 'West Coast Brewing' },
+  { url: 'https://www.westcoastbrewing.jp/feed/',               name: 'West Coast Brewing' },
+  { url: 'https://www.openair.beer/blogs/news.atom',            name: 'open air' },
+  { url: 'https://www.craftbk.net/blogs/brew-ledger.atom',      name: 'CRAFT BANK' }
 ];
+
+const FEED_TIMEOUT_MS = 10000;
+
+async function getFeedXml(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; craftwave-scraper)' },
+    signal: AbortSignal.timeout(FEED_TIMEOUT_MS)
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const xml = await res.text();
+  if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(xml)) throw new Error('フィードではない（HTMLなど）');
+  return xml;
+}
 
 async function fetchSiteSources() {
   const since = Date.now() - 24 * 60 * 60 * 1000;
@@ -262,18 +282,36 @@ export function parseFeed(xml, name, since) {
   return out;
 }
 
+// 1つのサイトが遅くても全体が止まらないよう、並列＋タイムアウト付きで読む
 async function fetchFeeds() {
   const since = Date.now() - 24 * 60 * 60 * 1000;
+  const results = await Promise.allSettled(
+    FEEDS.map(async f => parseFeed(await getFeedXml(f.url), f.name, since))
+  );
   const out = [];
-  for (const f of FEEDS) {
-    try {
-      const xml = await (await fetch(f.url, { headers: { 'User-Agent': 'craftwave-scraper' } })).text();
-      out.push(...parseFeed(xml, f.name, since));
-    } catch (e) {
-      console.error('[FEED fail]', f.url, e.message);
-    }
-  }
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') out.push(...r.value);
+    else console.error('[FEED fail]', FEEDS[i].url, r.reason?.message);
+  });
   return out;
+}
+
+// 確認用：各フィードが読めるか、最新記事は何かを返す（24時間の絞り込みなし）
+export async function checkFeeds() {
+  return Promise.all(FEEDS.map(async f => {
+    try {
+      const items = parseFeed(await getFeedXml(f.url), f.name, 0)
+        .sort((a, b) => b.pub - a.pub);
+      return {
+        name: f.name, url: f.url, ok: true, count: items.length,
+        latest: items.slice(0, 3).map(x => ({
+          title: x.title, cat: x.cat, date: new Date(x.pub).toISOString().slice(0, 10), url: x.url
+        }))
+      };
+    } catch (e) {
+      return { name: f.name, url: f.url, ok: false, error: e.message };
+    }
+  }));
 }
 
 //
