@@ -27,7 +27,7 @@ export const categories = {
       'クラフトビール 発売',
       '限定ビール 発売',
       'ブルワリー コラボ ビール',
-      'IPA 発売'
+      'IPA ビール 発売'
     ],
     tags: ['限定ビール', 'newbeerrelease']
   },
@@ -84,7 +84,11 @@ const REPOST_DOMAINS = [
 ];
 
 // タイトルにこのどれかが入っていない記事は、ビールと関係ないものとして弾く
-const BEER_WORDS = /ビール|ビア|ブルワリー|ブルーイング|醸造|ブルーパブ|タップ|IPA|エール|ラガー|スタウト|ピルスナー|beer|brew/i;
+// ※「IPA」単体は情報処理推進機構などと紛らわしいので入れない
+const BEER_WORDS = /ビール|ビア|ブルワリー|ブルーイング|醸造|ブルーパブ|タップルーム|エール|ラガー|スタウト|ピルスナー|beer|brew/i;
+
+// 「＜画像2 / 4＞」のような飾りをタイトルから外す
+const cleanTitle = (t) => t.replace(/^[＜<]?\s*画像\s*\d+\s*\/\s*\d+\s*[＞>]\s*/, '').trim();
 
 const hostOf = (u) => {
   try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; }
@@ -102,7 +106,7 @@ export function parseNewsRss(xml, catId, since) {
   const $ = load(xml, { xmlMode: true });
   const out = [];
   $('item').each((_, el) => {
-    const title  = $(el).find('title').first().text().trim();
+    const title  = cleanTitle($(el).find('title').first().text());
     const link   = $(el).find('link').first().text().trim();
     const pub    = new Date($(el).find('pubDate').first().text()).getTime();
     const srcEl  = $(el).find('source').first();
