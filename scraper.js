@@ -65,8 +65,22 @@ const MAX_PER_CATEGORY = 8;
 //
 const NG_DOMAINS = [
   'news.yahoo.co.jp',
-  'food.biglobe.ne.jp'
+  'food.biglobe.ne.jp',
+  // 動画配信サイト（番組紹介が多く、放送日も古いことがある）
+  'tver.jp',
+  'youtube.com',
+  'youtu.be',
+  'abema.tv'
 ];
+
+//
+// ---------- 2.2) 「ビールがおまけ」の記事を外す ----------
+//   グルメ・旅行・ダイエットなどで、ビールがちょっと出てくるだけの記事
+//   ただし、ビールが主役だと分かる言葉があれば残す
+//
+const SIDE_TOPIC = /ランチ|ディナー|誕生日|ダイエット|減量|体重|\d+\s*kg|食べ方|パスタ|ピザ|スイーツ|ケーキ|宿泊|ホテル|旅館|温泉街|旅行記|カンパーイ|♪/;
+const BEER_MAIN  = /ブルワリー|ブリュワリー|醸造|ブルーパブ|ビアフェス|ビールフェス|ビール祭|麦酒祭|ビアバー|タップルーム|新作|新商品|発売|限定|オープン|開業|受賞|金賞/;
+export const isSideTopic = (title) => SIDE_TOPIC.test(title) && !BEER_MAIN.test(title);
 
 //
 // ---------- 2.5) PR TIMES 用のきびしいフィルター ----------
@@ -102,7 +116,10 @@ const REPOST_DOMAINS = [
 const BEER_WORDS = /ビール|ビア|ブルワリー|ブルーイング|醸造|ブルーパブ|タップルーム|エール|ラガー|スタウト|ピルスナー|beer|brew/i;
 
 // 「＜画像2 / 4＞」のような飾りをタイトルから外す
-const cleanTitle = (t) => t.replace(/^[＜<]?\s*画像\s*\d+\s*\/\s*\d+\s*[＞>]\s*/, '').trim();
+const cleanTitle = (t) => t
+  .replace(/^[＜<]?\s*画像\s*\d+\s*\/\s*\d+\s*[＞>]\s*/, '')   // ＜画像2 / 4＞
+  .replace(/^画像\s*[|｜]\s*/, '')                              // 画像 |
+  .trim();
 
 const hostOf = (u) => {
   try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; }
@@ -118,8 +135,8 @@ const rssURL = q =>
 // タイトルからカテゴリを推定する（専門サイトや RSS フィード用）
 export function classify(title) {
   if (/フェス|祭|イベント|テイクオーバー|takeover|ビアガーデン|試飲会|開催/i.test(title)) return 'event';
-  if (/オープン|開店|新店|開業|移転/.test(title)) return 'shop';
-  if (/発売|新商品|新作|限定|リリース|販売開始|登場|コラボ/.test(title)) return 'release';
+  if (/オープン|開店|新店|開業|移転|出店|進出/.test(title)) return 'shop';
+  if (/発売|新商品|新作|限定|リリース|販売開始|登場|コラボ|誕生|より提供|提供開始/.test(title)) return 'release';
   return 'news';
 }
 
@@ -146,12 +163,15 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
     const isPr = host ? matchDomain(host, [PR_DOMAIN]) : false;
     if (isPr && !isCraftPress(title)) return;
     if (!opts.beerOnly && !BEER_WORDS.test(title)) return;
+    if (!opts.beerOnly && isSideTopic(title)) return;
 
     // フィルタ３：直近のものだけ
     if (!(pub > since)) return;
 
     out.push({
-      cat: catId === 'auto' ? classify(title) : catId,
+      // カテゴリは検索ワードではなくタイトルの中身で決める
+      // （「〇〇発売」がイベント欄に入る、などのズレを防ぐ）
+      cat: classify(title),
       title,
       url: link,
       source,
