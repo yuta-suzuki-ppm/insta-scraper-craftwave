@@ -4,7 +4,10 @@ import { getCraftwaveData } from './scraper.js';
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.get('/health', (_, res) => res.send('ok 🚀'));
+// Render が自動で入れるコミット ID を返す（どのバージョンが動いているか確認用）
+app.get('/health', (_, res) =>
+  res.send('ok 🚀 ' + (process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7))
+);
 
 app.get('/api/craftwave', async (_, res) => {
   try {
