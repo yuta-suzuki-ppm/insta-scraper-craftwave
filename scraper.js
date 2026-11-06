@@ -230,13 +230,13 @@ export const SITE_SOURCES = [
 
 //   Shopify のブログは /blogs/<ブログ名>.atom、WordPress は /feed/ でフィードが出る
 //   動くかどうかは /api/feeds-check で確認できる（配信には影響しない）
+//   cat を指定するとタイトルに関係なくそのカテゴリにする（ビール名だけの醸造記録など）
+//   2026-11-06 確認：BLACK TIDE（最終更新2020年）と open air（同2022年）はサイトのお知らせが
+//   止まっていて X / Instagram 中心なので未登録
 export const FEEDS = [
   { url: 'https://kaiganbrewery.com/blogs/news.atom',          name: 'KAIGAN BREWERY' },
-  { url: 'http://blacktidebrewing.com/feed/',                   name: 'BLACK TIDE BREWING' },
   { url: 'https://www.westcoastbrewing.jp/news/feed/',          name: 'West Coast Brewing' },
-  { url: 'https://www.westcoastbrewing.jp/feed/',               name: 'West Coast Brewing' },
-  { url: 'https://www.openair.beer/blogs/news.atom',            name: 'open air' },
-  { url: 'https://www.craftbk.net/blogs/brew-ledger.atom',      name: 'CRAFT BANK' }
+  { url: 'https://www.craftbk.net/blogs/brew-ledger.atom',      name: 'CRAFT BANK', cat: 'release' }
 ];
 
 const FEED_TIMEOUT_MS = 10000;
@@ -267,7 +267,7 @@ async function fetchSiteSources() {
 }
 
 // RSS（<item>）と Atom（<entry>）の両方を読む
-export function parseFeed(xml, name, since) {
+export function parseFeed(xml, name, since, fixedCat) {
   const $ = load(xml, { xmlMode: true });
   const out = [];
   $('item, entry').each((_, el) => {
@@ -277,7 +277,7 @@ export function parseFeed(xml, name, since) {
     const dateText = $(el).find('pubDate, published, updated, dc\\:date').first().text();
     const pub = new Date(dateText).getTime();
     if (!title || !link || !(pub > since)) return;
-    out.push({ cat: classify(title), title, url: link, source: name, repost: false, pub });
+    out.push({ cat: fixedCat || classify(title), title, url: link, source: name, repost: false, pub });
   });
   return out;
 }
@@ -286,7 +286,7 @@ export function parseFeed(xml, name, since) {
 async function fetchFeeds() {
   const since = Date.now() - 24 * 60 * 60 * 1000;
   const results = await Promise.allSettled(
-    FEEDS.map(async f => parseFeed(await getFeedXml(f.url), f.name, since))
+    FEEDS.map(async f => parseFeed(await getFeedXml(f.url), f.name, since, f.cat))
   );
   const out = [];
   results.forEach((r, i) => {
@@ -300,7 +300,7 @@ async function fetchFeeds() {
 export async function checkFeeds() {
   return Promise.all(FEEDS.map(async f => {
     try {
-      const items = parseFeed(await getFeedXml(f.url), f.name, 0)
+      const items = parseFeed(await getFeedXml(f.url), f.name, 0, f.cat)
         .sort((a, b) => b.pub - a.pub);
       return {
         name: f.name, url: f.url, ok: true, count: items.length,
