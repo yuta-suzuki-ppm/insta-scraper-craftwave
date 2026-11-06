@@ -101,8 +101,18 @@ const matchDomain = (host, list) => list.some(d => host === d || host.endsWith('
 const rssURL = q =>
   `https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&hl=ja&gl=JP&ceid=JP:ja`;
 
+// タイトルからカテゴリを推定する（専門サイトや RSS フィード用）
+export function classify(title) {
+  if (/フェス|祭|イベント|テイクオーバー|takeover|ビアガーデン|試飲会|開催/i.test(title)) return 'event';
+  if (/オープン|開店|新店|開業|移転/.test(title)) return 'shop';
+  if (/発売|新商品|新作|限定|リリース|販売開始|登場|コラボ/.test(title)) return 'release';
+  return 'news';
+}
+
 // RSS の XML から記事を取り出す（テストしやすいように分離）
-export function parseNewsRss(xml, catId, since) {
+//   catId に 'auto' を渡すとタイトルからカテゴリを推定
+//   opts.beerOnly = true のときはビール専門サイトなので言葉チェックを省く
+export function parseNewsRss(xml, catId, since, opts = {}) {
   const $ = load(xml, { xmlMode: true });
   const out = [];
   $('item').each((_, el) => {
@@ -110,7 +120,7 @@ export function parseNewsRss(xml, catId, since) {
     const link   = $(el).find('link').first().text().trim();
     const pub    = new Date($(el).find('pubDate').first().text()).getTime();
     const srcEl  = $(el).find('source').first();
-    const source = srcEl.text().trim();
+    const source = srcEl.text().trim() || opts.sourceName || '';
     const host   = hostOf(srcEl.attr('url') || '');
 
     if (!title || !link) return;
@@ -119,13 +129,13 @@ export function parseNewsRss(xml, catId, since) {
     if (host && matchDomain(host, NG_DOMAINS)) return;
 
     // フィルタ２：ビール関連の言葉がタイトルにあるか
-    if (!BEER_WORDS.test(title)) return;
+    if (!opts.beerOnly && !BEER_WORDS.test(title)) return;
 
     // フィルタ３：直近のものだけ
     if (!(pub > since)) return;
 
     out.push({
-      cat: catId,
+      cat: catId === 'auto' ? classify(title) : catId,
       title,
       url: link,
       source,
@@ -147,6 +157,68 @@ async function fetchNewsByCategory(catId) {
       out.push(...parseNewsRss(xml, catId, since));
     } catch (e) {
       console.error('[RSS fail]', k, e.message);
+    }
+  }
+  return out;
+}
+
+//
+// ---------- 3.5) ビール専門サイト・ブルワリー公式サイト ----------
+//
+//   SITE_SOURCES: Google ニュースに載っているサイトを「サイト指定」で全部拾う
+//   FEEDS       : サイトが自前で出している RSS / Atom フィードを直接読む
+//                 （Google ニュースに載らない小さいブルワリー向け）
+//   どちらもビール専門なので、タイトルのビール判定は省いてカテゴリは自動推定
+//
+export const SITE_SOURCES = [
+  { site: 'alwayslovebeer.com', name: 'オールウェイズ・ラブ・ビール' },
+  { site: 'yohobrewing.com',    name: 'ヤッホーブルーイング' },
+  { site: 'coedobrewery.com',   name: 'コエドブルワリー' }
+];
+
+export const FEEDS = [
+  // 例：{ url: 'https://example-brewery.jp/feed', name: '〇〇ブルワリー' },
+];
+
+async function fetchSiteSources() {
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const out = [];
+  for (const s of SITE_SOURCES) {
+    try {
+      const xml = await (await fetch(rssURL(`site:${s.site}`))).text();
+      out.push(...parseNewsRss(xml, 'auto', since, { beerOnly: true, sourceName: s.name }));
+    } catch (e) {
+      console.error('[SITE fail]', s.site, e.message);
+    }
+  }
+  return out;
+}
+
+// RSS（<item>）と Atom（<entry>）の両方を読む
+export function parseFeed(xml, name, since) {
+  const $ = load(xml, { xmlMode: true });
+  const out = [];
+  $('item, entry').each((_, el) => {
+    const title = cleanTitle($(el).find('title').first().text());
+    const linkEl = $(el).find('link').first();
+    const link = (linkEl.attr('href') || linkEl.text() || '').trim();
+    const dateText = $(el).find('pubDate, published, updated, dc\\:date').first().text();
+    const pub = new Date(dateText).getTime();
+    if (!title || !link || !(pub > since)) return;
+    out.push({ cat: classify(title), title, url: link, source: name, repost: false, pub });
+  });
+  return out;
+}
+
+async function fetchFeeds() {
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const out = [];
+  for (const f of FEEDS) {
+    try {
+      const xml = await (await fetch(f.url, { headers: { 'User-Agent': 'craftwave-scraper' } })).text();
+      out.push(...parseFeed(xml, f.name, since));
+    } catch (e) {
+      console.error('[FEED fail]', f.url, e.message);
     }
   }
   return out;
@@ -257,6 +329,10 @@ export function dedupe(items) {
 //
 export async function getCraftwaveData() {
   const results = [];
+
+  // 専門サイト・ブルワリーを先に入れる（同じ記事なら専門サイト側が残りやすい）
+  results.push(...await fetchSiteSources());
+  results.push(...await fetchFeeds());
 
   for (const catId of Object.keys(categories)) {
     results.push(...await fetchNewsByCategory(catId));
