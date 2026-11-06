@@ -1,35 +1,67 @@
-// scraper.js 〈重複タイトルもはじく最新版〉
+// scraper.js 〈情報源拡張・重複判定強化版〉
 import { load } from 'cheerio';
 import axios from 'axios';
 
 //
 // ---------- 1) カテゴリ & キーワード定義 ----------
+//   keys: Google ニュースで検索する言葉（スペース区切りは AND 検索）
+//   tags: Instagram のハッシュタグ
 //
 export const categories = {
   event: {
     name: 'イベント',
-    keys: ['クラフトビール フェス', 'ビアフェス', 'ビール イベント', 'tap takeover'],
+    keys: [
+      'クラフトビール フェス',
+      'ビアフェス',
+      'ビールフェス',
+      'クラフトビール イベント',
+      'タップテイクオーバー',
+      'tap takeover'
+    ],
     tags: ['ビアフェス', 'taptakeover']
   },
   release: {
     name: '新作リリース',
-    keys: ['新商品 クラフトビール', '限定ビール 発売', 'craft beer release'],
+    keys: [
+      'クラフトビール 新商品',
+      'クラフトビール 発売',
+      '限定ビール 発売',
+      'ブルワリー コラボ ビール',
+      'IPA 発売'
+    ],
     tags: ['限定ビール', 'newbeerrelease']
   },
   shop: {
     name: '新店舗',
-    keys: ['クラフトビール 新店舗', 'ビールバー オープン', 'taproom open'],
+    keys: [
+      'クラフトビール 新店舗',
+      'クラフトビール オープン',
+      'ビアバー オープン',
+      'ブルワリー オープン',
+      'ブルーパブ オープン',
+      'タップルーム オープン'
+    ],
     tags: ['クラフトビールバー', '新店オープン']
   },
   news: {
     name: '業界ニュース',
-    keys: ['クラフトビール 業界', '醸造所 設立', 'brewery news'],
+    keys: [
+      'クラフトビール',
+      'ブルワリー',
+      '醸造所 ビール',
+      '地ビール'
+    ],
     tags: ['クラフトビールニュース']
   }
 };
 
+// 1 カテゴリあたりの最大件数（LINE の配信通数を増やしすぎないため）
+const MAX_PER_CATEGORY = 8;
+
 //
-// ---------- 追加：ノイズを弾く NG ドメイン ----------
+// ---------- 2) ドメイン設定 ----------
+//   NG_DOMAINS   : 丸ごと除外するサイト
+//   REPOST_DOMAINS: 転載サイト（元記事があればそちらを優先、なければ残す）
 //
 const NG_DOMAINS = [
   'prtimes.jp',
@@ -37,36 +69,78 @@ const NG_DOMAINS = [
   'food.biglobe.ne.jp'
 ];
 
+const REPOST_DOMAINS = [
+  'yahoo.co.jp',
+  'biglobe.ne.jp',
+  'livedoor.com',
+  'goo.ne.jp',
+  'excite.co.jp',
+  'infoseek.co.jp',
+  'newspicks.com',
+  'smartnews.com',
+  'msn.com',
+  'auone.jp',
+  'docomo.ne.jp'
+];
+
+// タイトルにこのどれかが入っていない記事は、ビールと関係ないものとして弾く
+const BEER_WORDS = /ビール|ビア|ブルワリー|ブルーイング|醸造|ブルーパブ|タップ|IPA|エール|ラガー|スタウト|ピルスナー|beer|brew/i;
+
+const hostOf = (u) => {
+  try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; }
+};
+const matchDomain = (host, list) => list.some(d => host === d || host.endsWith('.' + d));
+
 //
-// ---------- 2) Google News RSS で Web 収集 ----------
+// ---------- 3) Google News RSS で Web 収集 ----------
 //
 const rssURL = q =>
-  `https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d site:.jp')}&hl=ja&gl=JP&ceid=JP:ja`;
+  `https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&hl=ja&gl=JP&ceid=JP:ja`;
+
+// RSS の XML から記事を取り出す（テストしやすいように分離）
+export function parseNewsRss(xml, catId, since) {
+  const $ = load(xml, { xmlMode: true });
+  const out = [];
+  $('item').each((_, el) => {
+    const title  = $(el).find('title').first().text().trim();
+    const link   = $(el).find('link').first().text().trim();
+    const pub    = new Date($(el).find('pubDate').first().text()).getTime();
+    const srcEl  = $(el).find('source').first();
+    const source = srcEl.text().trim();
+    const host   = hostOf(srcEl.attr('url') || '');
+
+    if (!title || !link) return;
+
+    // フィルタ１：NG ドメイン除外（Google ニュース経由でも元サイトで判定）
+    if (host && matchDomain(host, NG_DOMAINS)) return;
+
+    // フィルタ２：ビール関連の言葉がタイトルにあるか
+    if (!BEER_WORDS.test(title)) return;
+
+    // フィルタ３：直近のものだけ
+    if (!(pub > since)) return;
+
+    out.push({
+      cat: catId,
+      title,
+      url: link,
+      source,
+      repost: host ? matchDomain(host, REPOST_DOMAINS) : false,
+      pub
+    });
+  });
+  return out;
+}
 
 async function fetchNewsByCategory(catId) {
   const { keys } = categories[catId];
-  const yesterday = Date.now() - 24 * 60 * 60 * 1000;
-  let out = [];
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const out = [];
 
   for (const k of keys) {
     try {
       const xml = await (await fetch(rssURL(k))).text();
-      const $ = load(xml, { xmlMode: true });
-      $('item').each((_, el) => {
-        const title = $(el).find('title').text();
-        const link  = $(el).find('link').text();
-        const pub   = new Date($(el).find('pubDate').text()).getTime();
-
-        // フィルタ１：NG ドメイン除外
-        if (NG_DOMAINS.some(d => link.includes(d))) return;
-
-        // フィルタ２：タイトル再チェック（AND）
-        const low = title.toLowerCase();
-        const ok  = k.toLowerCase().split(' ').every(w => low.includes(w));
-        if (!ok) return;
-
-        if (pub > yesterday) out.push({ cat: catId, title, url: link });
-      });
+      out.push(...parseNewsRss(xml, catId, since));
     } catch (e) {
       console.error('[RSS fail]', k, e.message);
     }
@@ -75,7 +149,7 @@ async function fetchNewsByCategory(catId) {
 }
 
 //
-// ---------- 3) Instagram (ハッシュタグ) 収集 ----------
+// ---------- 4) Instagram (ハッシュタグ) 収集 ----------
 //
 const IG_TOKEN  = process.env.IG_TOKEN  || '';
 const IG_BUS_ID = process.env.IG_BUS_ID || '';
@@ -83,8 +157,8 @@ const IG_BUS_ID = process.env.IG_BUS_ID || '';
 async function fetchInstaByCategory(catId) {
   if (!IG_TOKEN || !IG_BUS_ID) return [];
   const { tags } = categories[catId];
-  const yesterday = Date.now() - 24 * 60 * 60 * 1000;
-  let out = [];
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const out = [];
 
   for (const tag of tags) {
     try {
@@ -109,11 +183,15 @@ async function fetchInstaByCategory(catId) {
       );
 
       (media.data || []).forEach(p => {
-        if (Date.parse(p.timestamp) > yesterday) {
+        const pub = Date.parse(p.timestamp);
+        if (pub > since) {
           out.push({
             cat: catId,
             title: (p.caption || '').split('\n')[0].slice(0, 60) + '…',
-            url: p.permalink
+            url: p.permalink,
+            source: 'Instagram',
+            repost: false,
+            pub
           });
         }
       });
@@ -125,34 +203,73 @@ async function fetchInstaByCategory(catId) {
 }
 
 //
-// ---------- 4) エントリーポイント（まとめて返す） ----------
+// ---------- 5) 重複をまとめる ----------
+//   ・同じ URL は 1 件
+//   ・タイトルが 8 割以上同じ記事は 1 件（元記事を優先、転載は後回し）
+//   ・同じ記事が複数カテゴリに入ったら、先に定義したカテゴリを優先
+//
+const normTitle = (t) => String(t)
+  .replace(/\s+[-－–|｜]\s+[^-－–|｜]+$/, '')        // 末尾の「 - 媒体名」
+  .replace(/[（(][^（）()]*[）)]\s*$/, '')            // 末尾の「（媒体名）」
+  .replace(/[\s　「」『』【】〈〉《》、。，．・…！？!?:：;；,.\-－–~〜'"“”‘’]/g, '')
+  .toLowerCase();
+
+const bigrams = (s) => {
+  const g = new Set();
+  for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2));
+  return g;
+};
+
+const isSimilar = (a, b) => {
+  const n = Math.min(a.size, b.size);
+  if (n < 6) return false;
+  let hit = 0;
+  a.forEach(x => { if (b.has(x)) hit++; });
+  return hit / n >= 0.8;
+};
+
+export function dedupe(items) {
+  const catOrder = Object.keys(categories);
+  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)) }));
+  const order = indexed.slice().sort((x, y) =>
+    (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
+    (catOrder.indexOf(x.it.cat) - catOrder.indexOf(y.it.cat)) ||
+    (x.i - y.i)
+  );
+
+  const seenUrl = new Set();
+  const kept = [];
+  for (const e of order) {
+    if (seenUrl.has(e.it.url)) continue;
+    if (kept.some(k => isSimilar(e.g, k.g))) continue;
+    seenUrl.add(e.it.url);
+    kept.push(e);
+  }
+  return kept.sort((x, y) => x.i - y.i).map(e => e.it);
+}
+
+//
+// ---------- 6) エントリーポイント（まとめて返す） ----------
 //
 export async function getCraftwaveData() {
-  let results = [];
+  const results = [];
 
   for (const catId of Object.keys(categories)) {
     results.push(...await fetchNewsByCategory(catId));
     results.push(...await fetchInstaByCategory(catId));
   }
 
-  // ① URL 重複カット
-  let uniq = Array.from(new Map(results.map(o => [o.url, o])).values());
-
-  // ② タイトルがほぼ同じ記事を 1 本だけ残す
-  const norm = str =>
-    str
-      .toLowerCase()
-      .replace(/[【\[\(（「『].*?[】\]\)）」』]/g, '') // カッコ内を削除
-      .replace(/\s+/g, '');                             // スペース削除
-
-  const seen = new Set();
+  // カテゴリごとに新しい順で上限件数まで（LINE の配信通数を増やしすぎないため）
+  const unique = dedupe(results);
   const final = [];
-  for (const item of uniq) {
-    const key = norm(item.title).slice(0, 30);          // 先頭30文字で比較
-    if (seen.has(key)) continue;                        // もう見たらスキップ
-    seen.add(key);
-    final.push(item);
+  for (const catId of Object.keys(categories)) {
+    final.push(
+      ...unique
+        .filter(x => x.cat === catId)
+        .sort((a, b) => b.pub - a.pub)
+        .slice(0, MAX_PER_CATEGORY)
+    );
   }
 
-  return final.slice(0, 100); // 最大100件返す
+  return final.map(({ cat, title, url, source }) => ({ cat, title, url, source }));
 }
