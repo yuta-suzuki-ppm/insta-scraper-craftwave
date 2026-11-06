@@ -64,10 +64,24 @@ const MAX_PER_CATEGORY = 8;
 //   REPOST_DOMAINS: 転載サイト（元記事があればそちらを優先、なければ残す）
 //
 const NG_DOMAINS = [
-  'prtimes.jp',
   'news.yahoo.co.jp',
   'food.biglobe.ne.jp'
 ];
+
+//
+// ---------- 2.5) PR TIMES 用のきびしいフィルター ----------
+//   PR TIMES は記事の 9 割がビールと関係ないので、クラフトの言葉がある記事だけ通す
+//
+const PR_DOMAIN = 'prtimes.jp';
+const PR_MAX_PER_DAY = 5;
+const PR_KEYS = ['クラフトビール', 'ブルワリー', '醸造所 ビール', 'ビアフェス', 'ビール 発売'];
+
+const CRAFT_WORDS = /クラフトビール|クラフト・ビール|ブルワリー|ブリュワリー|ブルーイング|ブルーパブ|タップルーム|ヘイジー|セゾン|ペールエール|スタウト|(?<!サ)ポーター|ヴァイツェン|ピルスナー|[ァ-ヶー]+エール|craft\s*beer|brewery|brewing/i;
+const PR_EXCLUDE = /クラフトサケ|サケ醸造|日本酒|清酒|どぶろく|ウイスキー|ワイン|焼酎|に関するプレスリリース一覧|のプレスリリース\s*-\s*PR TIMES$|プレスリリース・ニュースリリース/;
+
+export const isCraftPress = (title) =>
+  !PR_EXCLUDE.test(title) &&
+  (CRAFT_WORDS.test(title) || (/醸造所/.test(title) && /ビール|エール|ラガー|ビア/.test(title)));
 
 const REPOST_DOMAINS = [
   'yahoo.co.jp',
@@ -129,6 +143,8 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
     if (host && matchDomain(host, NG_DOMAINS)) return;
 
     // フィルタ２：ビール関連の言葉がタイトルにあるか
+    const isPr = host ? matchDomain(host, [PR_DOMAIN]) : false;
+    if (isPr && !isCraftPress(title)) return;
     if (!opts.beerOnly && !BEER_WORDS.test(title)) return;
 
     // フィルタ３：直近のものだけ
@@ -140,9 +156,25 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
       url: link,
       source,
       repost: host ? matchDomain(host, REPOST_DOMAINS) : false,
+      pr: isPr,
       pub
     });
   });
+  return out;
+}
+
+// PR TIMES をキーワード付きで検索（カテゴリはタイトルから自動推定）
+async function fetchPrTimes() {
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const out = [];
+  for (const k of PR_KEYS) {
+    try {
+      const xml = await (await fetch(rssURL(`site:${PR_DOMAIN} ${k}`))).text();
+      out.push(...parseNewsRss(xml, 'auto', since));
+    } catch (e) {
+      console.error('[PR fail]', k, e.message);
+    }
+  }
   return out;
 }
 
@@ -309,6 +341,7 @@ export function dedupe(items) {
   const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)) }));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
+    (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
     (catOrder.indexOf(x.it.cat) - catOrder.indexOf(y.it.cat)) ||
     (x.i - y.i)
   );
@@ -339,8 +372,16 @@ export async function getCraftwaveData() {
     results.push(...await fetchInstaByCategory(catId));
   }
 
+  results.push(...await fetchPrTimes());
+
+  // PR TIMES は新しい順に 1 日最大 PR_MAX_PER_DAY 件まで
+  const deduped = dedupe(results);
+  const prKeep = new Set(
+    deduped.filter(x => x.pr).sort((a, b) => b.pub - a.pub).slice(0, PR_MAX_PER_DAY)
+  );
+  const unique = deduped.filter(x => !x.pr || prKeep.has(x));
+
   // カテゴリごとに新しい順で上限件数まで（LINE の配信通数を増やしすぎないため）
-  const unique = dedupe(results);
   const final = [];
   for (const catId of Object.keys(categories)) {
     final.push(
@@ -351,5 +392,5 @@ export async function getCraftwaveData() {
     );
   }
 
-  return final.map(({ cat, title, url, source }) => ({ cat, title, url, source }));
+  return final.map(({ cat, title, url, source, pr }) => ({ cat, title, url, source, pr: !!pr }));
 }
