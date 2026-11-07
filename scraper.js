@@ -106,9 +106,10 @@ export const hasPastYear = (title, now = new Date()) => {
 // チューハイ・ハイボールなど、ビールではないお酒（RTD）の新商品は外す
 //   「キリンビール、氷結〜発売」のように社名の「ビール」だけで通ってしまうのを防ぐ
 //   ※大手メーカーのビールの記事は残す（ゆうたの判断）
-const RTD_WORDS = /氷結|チューハイ|酎ハイ|ハイボール|カクテル|レモンサワー|ほろよい|ストロングゼロ|-196/;
+const RTD_WORDS = /氷結|チューハイ|酎ハイ|ハイボール|カクテル|モクテル|サワー(?!エール|ビール|IPA)|ほろよい|ストロングゼロ|-196/;
+export const isRtdTitle = (title) => RTD_WORDS.test(title) && !CRAFT_WORDS.test(title);
 export const isBeerTitle = (title) => {
-  if (RTD_WORDS.test(title) && !CRAFT_WORDS.test(title)) return false;
+  if (isRtdTitle(title)) return false;
   return BEER_WORDS.test(title);
 };
 
@@ -195,6 +196,7 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
     if (isPr && !isCraftPress(title)) return;
     if (!opts.beerOnly && !isBeerTitle(title)) return;
     if (!opts.beerOnly && isSideTopic(title)) return;
+    if (isRtdTitle(title)) return;   // ビール専門サイトでもチューハイ等の記事は外す
 
     // フィルタ2.5：古い記事（画像ギャラリー・去年以前の年が入ったタイトル）
     if (isGalleryPage(rawTitle) || hasPastYear(title)) return;
@@ -258,8 +260,8 @@ async function fetchNewsByCategory(catId) {
 //
 export const SITE_SOURCES = [
   { site: 'alwayslovebeer.com', name: 'オールウェイズ・ラブ・ビール' },
-  { site: 'yohobrewing.com',    name: 'ヤッホーブルーイング' },
-  { site: 'coedobrewery.com',   name: 'コエドブルワリー' }
+  { site: 'yohobrewing.com',    name: 'ヤッホーブルーイング', official: true },
+  { site: 'coedobrewery.com',   name: 'コエドブルワリー',     official: true }
 ];
 
 //   Shopify のブログは /blogs/<ブログ名>.atom、WordPress は /feed/ でフィードが出る
@@ -292,7 +294,8 @@ async function fetchSiteSources() {
   for (const s of SITE_SOURCES) {
     try {
       const xml = await (await fetch(rssURL(`site:${s.site}`))).text();
-      out.push(...parseNewsRss(xml, 'auto', since, { beerOnly: true, sourceName: s.name }));
+      out.push(...parseNewsRss(xml, 'auto', since, { beerOnly: true, sourceName: s.name })
+        .map(x => ({ ...x, prio: s.official ? 3 : 1 })));
     } catch (e) {
       console.error('[SITE fail]', s.site, e.message);
     }
@@ -452,7 +455,7 @@ export function dedupe(items) {
 //
 // ---------- 6) エントリーポイント（まとめて返す） ----------
 //
-// 厳選の優先度：ブルワリー公式 ＞ ビール専門サイト ＞ ニュース ＞ 転載・PR
+// 厳選の優先度：ブルワリー公式 ＞ ニュース・専門サイト ＞ 転載・PR
 const priorityOf = (x) => x.prio ?? (x.pr || x.repost ? 0 : 1);
 
 export async function getCraftwaveData({ days } = {}) {
@@ -461,7 +464,7 @@ export async function getCraftwaveData({ days } = {}) {
   const results = [];
 
   // 専門サイト・ブルワリーを先に入れる（同じ記事なら専門サイト側が残りやすい）
-  results.push(...(await fetchSiteSources()).map(x => ({ ...x, prio: 2 })));
+  results.push(...await fetchSiteSources());   // ブルワリー公式は3、専門ニュースサイトは1
   results.push(...(await fetchFeeds()).map(x => ({ ...x, prio: 3 })));
 
   for (const catId of Object.keys(categories)) {
