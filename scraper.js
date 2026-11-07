@@ -1,6 +1,7 @@
 // scraper.js 〈情報源拡張・重複判定強化版〉
 import { load } from 'cheerio';
 import axios from 'axios';
+import { isFinishedEvent, scoreItem, MAX_PER_SOURCE } from './ranking.js';
 
 //
 // ---------- 1) カテゴリ & キーワード定義 ----------
@@ -445,7 +446,8 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    if (kept.some(k => isSimilar(e.g, k.g))) continue;
+    const same = kept.find(k => isSimilar(e.g, k.g));
+    if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
   }
@@ -456,9 +458,7 @@ export function dedupe(items) {
 // ---------- 6) エントリーポイント（まとめて返す） ----------
 //
 // 厳選の優先度：ブルワリー公式 ＞ ニュース・専門サイト ＞ 転載・PR
-const priorityOf = (x) => x.prio ?? (x.pr || x.repost ? 0 : 1);
-
-export async function getCraftwaveData({ days } = {}) {
+export async function getCraftwaveData({ days, debug } = {}) {
   const d = Number(days);
   windowDays = d >= 1 && d <= 30 ? Math.floor(d) : DEFAULT_DAYS;
   const results = [];
@@ -474,25 +474,34 @@ export async function getCraftwaveData({ days } = {}) {
 
   results.push(...await fetchPrTimes());
 
-  // PR TIMES は新しい順に PR_MAX_PER_WEEK 件まで
-  const deduped = dedupe(results);
-  const prKeep = new Set(
-    deduped.filter(x => x.pr).sort((a, b) => b.pub - a.pub).slice(0, PR_MAX_PER_WEEK)
-  );
-  const unique = deduped.filter(x => !x.pr || prKeep.has(x));
+  // 重複をまとめ → 終わったイベントを外し → クラフトビールの濃さで点数をつける
+  const now = Date.now();
+  const scored = dedupe(results)
+    .filter(x => !isFinishedEvent(x, now))
+    .map(x => ({ ...x, ...scoreItem(x) }));
+  const byScore = (a, b) => (b.score - a.score) || (b.pub - a.pub);   // 同点なら新しい順
 
-  // カテゴリごとに「優先度 → 新しい順」で上限件数まで
+  // PR TIMES は点数の高い順に PR_MAX_PER_WEEK 件まで
+  const prKeep = new Set(scored.filter(x => x.pr).sort(byScore).slice(0, PR_MAX_PER_WEEK));
+  const unique = scored.filter(x => !x.pr || prKeep.has(x));
+
+  // カテゴリごとに点数の高い順で上限件数まで（同じ配信元は MAX_PER_SOURCE 件まで）
   const final = [];
   for (const catId of Object.keys(categories)) {
+    const perSource = {};
     final.push(
       ...unique
         .filter(x => x.cat === catId)
-        .sort((a, b) => (priorityOf(b) - priorityOf(a)) || (b.pub - a.pub))
+        .sort(byScore)
+        .filter(x => (perSource[x.source] = (perSource[x.source] || 0) + 1) <= MAX_PER_SOURCE)
         .slice(0, MAX_PER_CATEGORY)
     );
   }
 
   // date：記事の公開日（日本時間の「11/5」形式）。週刊なのでLINEで表示できるように
   const md = (t) => new Date(t + 9 * 3600e3).toISOString().slice(5, 10).replace(/^0?(\d+)-0?(\d+)$/, '$1/$2');
-  return final.map(({ cat, title, url, source, pr, pub }) => ({ cat, title, url, source, pr: !!pr, date: md(pub) }));
+  return final.map(({ cat, title, url, source, pr, pub, score, why }) => ({
+    cat, title, url, source, pr: !!pr, date: md(pub),
+    ...(debug ? { score, why } : {})          // ?debug=1 のときだけ点数の内訳を出す
+  }));
 }

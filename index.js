@@ -11,8 +11,8 @@ app.get('/health', (_, res) =>
 
 app.get('/api/craftwave', async (req, res) => {
   try {
-    // ?days=1 などで集める期間を変えられる（指定なしは7日）
-    const data = await getCraftwaveData({ days: req.query.days });
+    // ?days=1 などで集める期間を変えられる（指定なしは7日）、?debug=1 で点数の内訳つき
+    const data = await getCraftwaveData({ days: req.query.days, debug: req.query.debug === '1' });
     res.json(data);
   } catch (e) {
     console.error('[api error]', e);
