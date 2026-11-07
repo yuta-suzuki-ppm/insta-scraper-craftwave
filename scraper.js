@@ -99,7 +99,7 @@ export const hasPastYear = (title, now = new Date()) => {
 // チューハイ・ハイボールなど、ビールではないお酒（RTD）の新商品は外す
 //   「キリンビール、氷結〜発売」のように社名の「ビール」だけで通ってしまうのを防ぐ
 //   ※大手メーカーのビールの記事は残す（ゆうたの判断）
-const RTD_WORDS = /氷結|チューハイ|酎ハイ|ハイボール|レモンサワー|ほろよい|ストロングゼロ|-196/;
+const RTD_WORDS = /氷結|チューハイ|酎ハイ|ハイボール|カクテル|レモンサワー|ほろよい|ストロングゼロ|-196/;
 export const isBeerTitle = (title) => {
   if (RTD_WORDS.test(title) && !CRAFT_WORDS.test(title)) return false;
   return BEER_WORDS.test(title);
