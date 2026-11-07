@@ -9,9 +9,10 @@ app.get('/health', (_, res) =>
   res.send('ok 🚀 ' + (process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7))
 );
 
-app.get('/api/craftwave', async (_, res) => {
+app.get('/api/craftwave', async (req, res) => {
   try {
-    const data = await getCraftwaveData();
+    // ?days=1 などで集める期間を変えられる（指定なしは7日）
+    const data = await getCraftwaveData({ days: req.query.days });
     res.json(data);
   } catch (e) {
     console.error('[api error]', e);

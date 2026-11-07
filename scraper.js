@@ -55,8 +55,15 @@ export const categories = {
   }
 };
 
-// 1 カテゴリあたりの最大件数（LINE の配信通数を増やしすぎないため）
-const MAX_PER_CATEGORY = 8;
+// ---------- 1.5) 集める期間と件数（週1配信向け 2026-11-07） ----------
+//   直近 DEFAULT_DAYS 日に公開された記事だけを集める
+//   /api/craftwave?days=1 のように期間を変えて確認もできる
+const DEFAULT_DAYS = 7;
+let windowDays = DEFAULT_DAYS;
+const windowStart = () => Date.now() - windowDays * 24 * 60 * 60 * 1000;
+
+// 1 カテゴリあたりの最大件数（週1の「今週の厳選」なので少なめ）
+const MAX_PER_CATEGORY = 5;
 
 //
 // ---------- 2) ドメイン設定 ----------
@@ -110,7 +117,7 @@ export const isBeerTitle = (title) => {
 //   PR TIMES は記事の 9 割がビールと関係ないので、クラフトの言葉がある記事だけ通す
 //
 const PR_DOMAIN = 'prtimes.jp';
-const PR_MAX_PER_DAY = 5;
+const PR_MAX_PER_WEEK = 3;   // PR TIMES は1回の配信で最大3件
 const PR_KEYS = ['クラフトビール', 'ブルワリー', '醸造所 ビール', 'ビアフェス', 'ビール 発売'];
 
 const CRAFT_WORDS = /クラフトビール|クラフト・ビール|ブルワリー|ブリュワリー|ブルーイング|ブルーパブ|タップルーム|ヘイジー|セゾン|ペールエール|スタウト|(?<!サ)ポーター|ヴァイツェン|ピルスナー|[ァ-ヶー]+エール|craft\s*beer|brewery|brewing/i;
@@ -153,7 +160,7 @@ const matchDomain = (host, list) => list.some(d => host === d || host.endsWith('
 // ---------- 3) Google News RSS で Web 収集 ----------
 //
 const rssURL = q =>
-  `https://news.google.com/rss/search?q=${encodeURIComponent(q + ' when:1d')}&hl=ja&gl=JP&ceid=JP:ja`;
+  `https://news.google.com/rss/search?q=${encodeURIComponent(q + ` when:${windowDays}d`)}&hl=ja&gl=JP&ceid=JP:ja`;
 
 // タイトルからカテゴリを推定する（専門サイトや RSS フィード用）
 export function classify(title) {
@@ -212,7 +219,7 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
 
 // PR TIMES をキーワード付きで検索（カテゴリはタイトルから自動推定）
 async function fetchPrTimes() {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const since = windowStart();
   const out = [];
   for (const k of PR_KEYS) {
     try {
@@ -227,7 +234,7 @@ async function fetchPrTimes() {
 
 async function fetchNewsByCategory(catId) {
   const { keys } = categories[catId];
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const since = windowStart();
   const out = [];
 
   for (const k of keys) {
@@ -280,7 +287,7 @@ async function getFeedXml(url) {
 }
 
 async function fetchSiteSources() {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const since = windowStart();
   const out = [];
   for (const s of SITE_SOURCES) {
     try {
@@ -311,7 +318,7 @@ export function parseFeed(xml, name, since, fixedCat) {
 
 // 1つのサイトが遅くても全体が止まらないよう、並列＋タイムアウト付きで読む
 async function fetchFeeds() {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const since = windowStart();
   const results = await Promise.allSettled(
     FEEDS.map(async f => parseFeed(await getFeedXml(f.url), f.name, since, f.cat))
   );
@@ -350,7 +357,7 @@ const IG_BUS_ID = process.env.IG_BUS_ID || '';
 async function fetchInstaByCategory(catId) {
   if (!IG_TOKEN || !IG_BUS_ID) return [];
   const { tags } = categories[catId];
-  const since = Date.now() - 24 * 60 * 60 * 1000;
+  const since = windowStart();
   const out = [];
 
   for (const tag of tags) {
@@ -445,12 +452,17 @@ export function dedupe(items) {
 //
 // ---------- 6) エントリーポイント（まとめて返す） ----------
 //
-export async function getCraftwaveData() {
+// 厳選の優先度：ブルワリー公式 ＞ ビール専門サイト ＞ ニュース ＞ 転載・PR
+const priorityOf = (x) => x.prio ?? (x.pr || x.repost ? 0 : 1);
+
+export async function getCraftwaveData({ days } = {}) {
+  const d = Number(days);
+  windowDays = d >= 1 && d <= 30 ? Math.floor(d) : DEFAULT_DAYS;
   const results = [];
 
   // 専門サイト・ブルワリーを先に入れる（同じ記事なら専門サイト側が残りやすい）
-  results.push(...await fetchSiteSources());
-  results.push(...await fetchFeeds());
+  results.push(...(await fetchSiteSources()).map(x => ({ ...x, prio: 2 })));
+  results.push(...(await fetchFeeds()).map(x => ({ ...x, prio: 3 })));
 
   for (const catId of Object.keys(categories)) {
     results.push(...await fetchNewsByCategory(catId));
@@ -459,23 +471,25 @@ export async function getCraftwaveData() {
 
   results.push(...await fetchPrTimes());
 
-  // PR TIMES は新しい順に 1 日最大 PR_MAX_PER_DAY 件まで
+  // PR TIMES は新しい順に PR_MAX_PER_WEEK 件まで
   const deduped = dedupe(results);
   const prKeep = new Set(
-    deduped.filter(x => x.pr).sort((a, b) => b.pub - a.pub).slice(0, PR_MAX_PER_DAY)
+    deduped.filter(x => x.pr).sort((a, b) => b.pub - a.pub).slice(0, PR_MAX_PER_WEEK)
   );
   const unique = deduped.filter(x => !x.pr || prKeep.has(x));
 
-  // カテゴリごとに新しい順で上限件数まで（LINE の配信通数を増やしすぎないため）
+  // カテゴリごとに「優先度 → 新しい順」で上限件数まで
   const final = [];
   for (const catId of Object.keys(categories)) {
     final.push(
       ...unique
         .filter(x => x.cat === catId)
-        .sort((a, b) => b.pub - a.pub)
+        .sort((a, b) => (priorityOf(b) - priorityOf(a)) || (b.pub - a.pub))
         .slice(0, MAX_PER_CATEGORY)
     );
   }
 
-  return final.map(({ cat, title, url, source, pr }) => ({ cat, title, url, source, pr: !!pr }));
+  // date：記事の公開日（日本時間の「11/5」形式）。週刊なのでLINEで表示できるように
+  const md = (t) => new Date(t + 9 * 3600e3).toISOString().slice(5, 10).replace(/^0?(\d+)-0?(\d+)$/, '$1/$2');
+  return final.map(({ cat, title, url, source, pr, pub }) => ({ cat, title, url, source, pr: !!pr, date: md(pub) }));
 }
