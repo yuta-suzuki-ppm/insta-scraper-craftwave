@@ -83,6 +83,29 @@ const BEER_MAIN  = /ブルワリー|ブリュワリー|醸造|ブルーパブ|�
 export const isSideTopic = (title) => SIDE_TOPIC.test(title) && !BEER_MAIN.test(title);
 
 //
+// ---------- 2.3) 古い記事・ビールじゃない記事を外す（2026-11-07 追加） ----------
+//
+// 画像ギャラリーのページ（＜画像16 / 17＞〜）は、Google が最近拾い直しただけで
+// 中身は何年も前の記事のことが多い（例：ウォーカープラスの2015年の記事）→ 丸ごと外す
+export const isGalleryPage = (rawTitle) =>
+  /^[＜<]?\s*画像\s*\d+\s*\/\s*\d+/.test(rawTitle) || /^画像\s*[|｜]/.test(rawTitle);
+
+// タイトルに去年以前の年（「2024年」「2025」など）が入っていたら古い記事として外す
+export const hasPastYear = (title, now = new Date()) => {
+  const thisYear = now.getFullYear();
+  return (title.match(/(?<!\d)20\d{2}(?!\d)/g) || []).some(y => Number(y) < thisYear);
+};
+
+// チューハイ・ハイボールなど、ビールではないお酒（RTD）の新商品は外す
+//   「キリンビール、氷結〜発売」のように社名の「ビール」だけで通ってしまうのを防ぐ
+//   ※大手メーカーのビールの記事は残す（ゆうたの判断）
+const RTD_WORDS = /氷結|チューハイ|酎ハイ|ハイボール|レモンサワー|ほろよい|ストロングゼロ|-196/;
+export const isBeerTitle = (title) => {
+  if (RTD_WORDS.test(title) && !CRAFT_WORDS.test(title)) return false;
+  return BEER_WORDS.test(title);
+};
+
+//
 // ---------- 2.5) PR TIMES 用のきびしいフィルター ----------
 //   PR TIMES は記事の 9 割がビールと関係ないので、クラフトの言葉がある記事だけ通す
 //
@@ -147,7 +170,8 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
   const $ = load(xml, { xmlMode: true });
   const out = [];
   $('item').each((_, el) => {
-    const title  = cleanTitle($(el).find('title').first().text());
+    const rawTitle = $(el).find('title').first().text().trim();
+    const title  = cleanTitle(rawTitle);
     const link   = $(el).find('link').first().text().trim();
     const pub    = new Date($(el).find('pubDate').first().text()).getTime();
     const srcEl  = $(el).find('source').first();
@@ -162,8 +186,11 @@ export function parseNewsRss(xml, catId, since, opts = {}) {
     // フィルタ２：ビール関連の言葉がタイトルにあるか
     const isPr = host ? matchDomain(host, [PR_DOMAIN]) : false;
     if (isPr && !isCraftPress(title)) return;
-    if (!opts.beerOnly && !BEER_WORDS.test(title)) return;
+    if (!opts.beerOnly && !isBeerTitle(title)) return;
     if (!opts.beerOnly && isSideTopic(title)) return;
+
+    // フィルタ2.5：古い記事（画像ギャラリー・去年以前の年が入ったタイトル）
+    if (isGalleryPage(rawTitle) || hasPastYear(title)) return;
 
     // フィルタ３：直近のものだけ
     if (!(pub > since)) return;
