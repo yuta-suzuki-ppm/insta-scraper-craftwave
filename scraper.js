@@ -470,12 +470,13 @@ export const sharePhrase = (a, b, min = 10) => {
 // 配信済みの記事と同じ話題かどうか（URLが同じ、または重複判定と同じルールで似ている）
 //   sent: [{ title, url }]（GAS が記録している過去の配信分）
 export function makeSentFilter(sent = []) {
-  const keyOf = (title) => ({ g: bigrams(normTitle(title)), q: quotedNames(title), p: corePhrase(title), n: normTitle(title) });
+  // 配信済みの記録にはカテゴリがないので cat: null（店名などの「含まれている」判定は使わない）
+  const keyOf = (title, cat = null) => ({ it: { cat, title }, g: bigrams(normTitle(title)), q: quotedNames(title), p: corePhrase(title), n: normTitle(title) });
   const past = sent.filter(x => x && x.title).map(x => ({ url: x.url, ...keyOf(x.title) }));
   const urls = new Set(sent.map(x => x && x.url).filter(Boolean));
   return (item) => {
     if (urls.has(item.url)) return true;
-    const e = keyOf(item.title);
+    const e = keyOf(item.title, item.cat);
     return past.some(k => isSimilar(e.g, k.g) || shareName(e, k) || sharePhrase(e.p, k.p));
   };
 }
@@ -558,7 +559,9 @@ export async function getCraftwaveData({ days, debug, sent } = {}) {
   // 重複をまとめ → 終わったイベントを外し → クラフトビールの濃さで点数をつける
   const now = Date.now();
   // 配信済み（過去数週分）と同じ話題は外す → 空いた枠には次点の記事が入る
-  const wasSent = makeSentFilter(Array.isArray(sent) ? sent.slice(0, 300) : []);
+  const sentFilter = makeSentFilter(Array.isArray(sent) ? sent.slice(0, 300) : []);
+  // 万一この判定でエラーが出ても、配信が空にならないよう「外さない」側に倒す
+  const wasSent = (x) => { try { return sentFilter(x); } catch (e) { console.error('[sent filter]', e.message); return false; } };
   const scored = dedupe(results)
     .filter(x => !wasSent(x))
     .filter(x => !isFinishedEvent(x, now))
