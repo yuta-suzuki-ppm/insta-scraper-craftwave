@@ -447,9 +447,21 @@ export const quotedNames = (t) => {
 };
 const shareName = (a, b) => [...a].some(x => b.has(x));
 
+// 一般的な言葉を外したあとで、10文字以上の同じフレーズがあれば同じ話題とみなす
+//   例：「ジャパンホップフェスト2026insvb」が両方に入っている
+const PHRASE_GENERIC = /クラフトビール|ブルワリー|ブリュワリー|醸造所|ビール/g;
+export const corePhrase = (t) => normTitle(t).replace(PHRASE_GENERIC, '|');
+export const sharePhrase = (a, b, min = 10) => {
+  for (let i = 0; i + min <= a.length; i++) {
+    const piece = a.slice(i, i + min);
+    if (!piece.includes('|') && b.includes(piece)) return true;
+  }
+  return false;
+};
+
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
-  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title) }));
+  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title) }));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
@@ -461,7 +473,7 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e.q, k.q));
+    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e.q, k.q) || sharePhrase(e.p, k.p));
     if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
