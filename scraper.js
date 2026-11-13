@@ -414,6 +414,7 @@ async function fetchInstaByCategory(catId) {
 //
 const normTitle = (t) => String(t)
   .replace(/\s+[-－–|｜]\s+[^-－–|｜]+$/, '')        // 末尾の「 - 媒体名」
+  .replace(/\s*[|｜]\s*[^|｜]{2,25}$/, '')           // さらに「｜媒体名」（例：〜｜レッツエンジョイ東京）
   .replace(/[（(][^（）()]*[）)]\s*$/, '')            // 末尾の「（媒体名）」
   .replace(/[\s　「」『』【】〈〉《》、。，．・･…！？!?:：;；,.\-－–~〜'"“”‘’]/g, '')
   .toLowerCase();
@@ -446,8 +447,13 @@ export const quotedNames = (t) => {
   return out;
 };
 // 同じ固有名がある、または片方の固有名がもう片方のタイトルにそのまま入っている
-const shareName = (e, k) =>
-  [...e.q].some(x => k.q.has(x) || k.n.includes(x)) || [...k.q].some(x => e.n.includes(x));
+//   ※「片方のタイトルに入っている」はイベント欄どうしだけ
+//     （店名・ブランド名が入っているだけの別ニュースをくっつけないため。例：エチゴビール、スプリングバレーブルワリー東京）
+const shareName = (e, k) => {
+  if ([...e.q].some(x => k.q.has(x))) return true;
+  if (e.it.cat !== 'event' || k.it.cat !== 'event') return false;
+  return [...e.q].some(x => k.n.includes(x)) || [...k.q].some(x => e.n.includes(x));
+};
 
 // 一般的な言葉を外したあとで、10文字以上の同じフレーズがあれば同じ話題とみなす
 //   例：「ジャパンホップフェスト2026insvb」が両方に入っている
