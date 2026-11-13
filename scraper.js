@@ -415,7 +415,7 @@ async function fetchInstaByCategory(catId) {
 const normTitle = (t) => String(t)
   .replace(/\s+[-－–|｜]\s+[^-－–|｜]+$/, '')        // 末尾の「 - 媒体名」
   .replace(/[（(][^（）()]*[）)]\s*$/, '')            // 末尾の「（媒体名）」
-  .replace(/[\s　「」『』【】〈〉《》、。，．・…！？!?:：;；,.\-－–~〜'"“”‘’]/g, '')
+  .replace(/[\s　「」『』【】〈〉《》、。，．・･…！？!?:：;；,.\-－–~〜'"“”‘’]/g, '')
   .toLowerCase();
 
 const bigrams = (s) => {
@@ -445,7 +445,9 @@ export const quotedNames = (t) => {
   }
   return out;
 };
-const shareName = (a, b) => [...a].some(x => b.has(x));
+// 同じ固有名がある、または片方の固有名がもう片方のタイトルにそのまま入っている
+const shareName = (e, k) =>
+  [...e.q].some(x => k.q.has(x) || k.n.includes(x)) || [...k.q].some(x => e.n.includes(x));
 
 // 一般的な言葉を外したあとで、10文字以上の同じフレーズがあれば同じ話題とみなす
 //   例：「ジャパンホップフェスト2026insvb」が両方に入っている
@@ -461,7 +463,7 @@ export const sharePhrase = (a, b, min = 10) => {
 
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
-  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title) }));
+  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title), n: normTitle(it.title) }));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
@@ -473,7 +475,7 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e.q, k.q) || sharePhrase(e.p, k.p));
+    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || sharePhrase(e.p, k.p));
     if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
