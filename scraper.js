@@ -548,8 +548,10 @@ export function dedupe(items) {
   const df = new Map();
   first.forEach(e => e.tk.forEach(w => df.set(w, (df.get(w) || 0) + 1)));
   const rareDf = Math.max(3, Math.ceil(first.length * 0.05));
+  //   代表には、たくさんのメディアが書いた記事を残す（大手1社の記事に吸収されて順位が下がるのを防ぐ）
+  const byCoverage = first.slice().sort((x, y) => ((y.it.dups || 0) - (x.it.dups || 0)) || (first.indexOf(x) - first.indexOf(y)));
   const kept = [];
-  for (const e of first) {
+  for (const e of byCoverage) {
     const same = kept.find(k => sameTopic(e, k, df, rareDf));
     if (same) { absorb(same, e); continue; }
     kept.push(e);
