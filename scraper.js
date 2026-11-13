@@ -165,10 +165,22 @@ const rssURL = q =>
   `https://news.google.com/rss/search?q=${encodeURIComponent(q + ` when:${windowDays}d`)}&hl=ja&gl=JP&ceid=JP:ja`;
 
 // タイトルからカテゴリを推定する（専門サイトや RSS フィード用）
+// 2026-11-13：「誕生」「登場」「限定」だけで新作に入っていた（WCBのホテル新棟など）ので、
+//   施設・会社の話題を先に判定し、新作は「ビールの商品だと分かる言葉」があるときだけにした
+const FACILITY = /ホテル|宿泊|客室|新棟|施設|工場|建設|着工|竣工|完成|リニューアル|改装/;
+const OPENING  = /オープン|開店|新店|開業|移転|出店|進出|グランドオープン/;
+const CORP     = /受賞|金賞|銀賞|銅賞|審査会|決算|売上|出荷|業績|資金調達|クラファン|クラウドファンディング|買収|提携|設立|就任|社長|募集|求人|採用|閉店|休業|終了|値上げ|調査|ランキング/;
+const PRODUCT  = /発売|新商品|新作|新製品|リリース|販売開始|予約開始|缶|ボトル|樽|IPA|ラガー|エール|スタウト|ピルスナー|ヘイジー|セゾン|サワー|ポーター|ヴァイツェン|ホップ/i;
+
 export function classify(title) {
-  if (/フェス|祭|イベント|テイクオーバー|takeover|ビアガーデン|試飲会|開催/i.test(title)) return 'event';
-  if (/オープン|開店|新店|開業|移転|出店|進出/.test(title)) return 'shop';
-  if (/発売|新商品|新作|限定|リリース|販売開始|登場|コラボ|誕生|より提供|提供開始/.test(title)) return 'release';
+  if (/フェス|祭|イベント|テイクオーバー|takeover|ビアガーデン|試飲会|開催|ツアー|見学|ワークショップ|セミナー/i.test(title)) return 'event';
+  if (OPENING.test(title)) return 'shop';
+  // ホテル・新棟・工場など：開業の言葉がなければ業界ニュース
+  if (FACILITY.test(title) && !PRODUCT.test(title)) return 'news';
+  if (CORP.test(title) && !/発売|新商品|新作|新製品|リリース|販売開始/.test(title)) return 'news';
+  if (/発売|新商品|新作|新製品|リリース|販売開始/.test(title)) return 'release';
+  // 「限定」「登場」「誕生」「コラボ」は、ビールの商品だと分かる言葉があるときだけ新作
+  if (/限定|登場|コラボ|誕生|より提供|提供開始|予約開始/.test(title) && (PRODUCT.test(title) || /ビール|ビア|醸造|ブリュー/.test(title))) return 'release';
   return 'news';
 }
 
