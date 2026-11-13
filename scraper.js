@@ -457,7 +457,7 @@ const shareName = (e, k) => {
 
 // 一般的な言葉を外したあとで、10文字以上の同じフレーズがあれば同じ話題とみなす
 //   例：「ジャパンホップフェスト2026insvb」が両方に入っている
-const PHRASE_GENERIC = /クラフトビール|ブルワリー|ブリュワリー|醸造所|ビール/g;
+const PHRASE_GENERIC = /クラフトビール|ブルワリー|ブリュワリー|ブルーイング|醸造所|ビール|brewing|brewery/gi;
 export const corePhrase = (t) => normTitle(t).replace(PHRASE_GENERIC, '|');
 export const sharePhrase = (a, b, min = 10) => {
   for (let i = 0; i + min <= a.length; i++) {
