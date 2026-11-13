@@ -561,7 +561,7 @@ export function dedupe(items) {
 // ---------- 6) エントリーポイント（まとめて返す） ----------
 //
 // 厳選の優先度：ブルワリー公式 ＞ ニュース・専門サイト ＞ 転載・PR
-export async function getCraftwaveData({ days, debug, sent } = {}) {
+export async function getCraftwaveData({ days, debug, sent, all } = {}) {
   const d = Number(days);
   windowDays = d >= 1 && d <= 30 ? Math.floor(d) : DEFAULT_DAYS;
   const results = [];
@@ -595,7 +595,8 @@ export async function getCraftwaveData({ days, debug, sent } = {}) {
 
   // カテゴリごとに点数の高い順で上限件数まで（同じ配信元は MAX_PER_SOURCE 件まで）
   const final = [];
-  for (const catId of Object.keys(categories)) {
+  if (all) final.push(...unique.slice().sort((a, b) => a.cat.localeCompare(b.cat) || byScore(a, b)));   // ?debug=all：上限前の全候補
+  else for (const catId of Object.keys(categories)) {
     const perSource = {};
     final.push(
       ...unique

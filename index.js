@@ -11,14 +11,15 @@ app.get('/health', (_, res) =>
 
 app.use(express.json({ limit: '200kb' }));
 
-// GET : ?days=1 などで集める期間を変えられる（指定なしは7日）、?debug=1 で点数の内訳つき
+// GET : ?days=1 などで集める期間を変えられる（指定なしは7日）、?debug=1 で点数の内訳つき、?debug=all で上限前の全候補（確認用）
 // POST: 本文に { sent: [{ title, url }] } を入れると、配信済みと同じ話題を外す（GAS の配信用）
 const craftwave = async (req, res) => {
   try {
     const q = { ...req.query, ...(req.body || {}) };
     const data = await getCraftwaveData({
       days: q.days,
-      debug: q.debug === '1' || q.debug === true,
+      debug: q.debug === '1' || q.debug === true || q.debug === 'all',
+      all: q.debug === 'all',
       sent: Array.isArray(q.sent) ? q.sent : []
     });
     res.json(data);
