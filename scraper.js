@@ -492,11 +492,11 @@ export function topicTokens(title) {
   }
   return out;
 }
-const RARE_DF = 3;
-const sameTopic = (e, k, df) => {
+// 「めったに出ない」の基準：3本以下、または全体の5%以下（記事が多い週は同じ話題の転載が増えるため）
+const sameTopic = (e, k, df, rareDf) => {
   if (e.it.cat !== k.it.cat) return false;
   const shared = [...e.tk].filter(w => k.tk.has(w));
-  return shared.length >= 3 && shared.filter(w => (df.get(w) || 0) <= RARE_DF).length >= 2;
+  return shared.length >= 3 && shared.filter(w => (df.get(w) || 0) <= rareDf).length >= 2;
 };
 
 export function dedupe(items) {
@@ -505,6 +505,7 @@ export function dedupe(items) {
   // 言葉ごとに、何本の記事に出てくるか（めったに出ない言葉ほど話題の決め手になる）
   const df = new Map();
   indexed.forEach(e => e.tk.forEach(w => df.set(w, (df.get(w) || 0) + 1)));
+  const rareDf = Math.max(3, Math.ceil(indexed.length * 0.05));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
@@ -516,8 +517,12 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || (e.it.cat === k.it.cat && sharePhrase(e.p, k.p)) || sameTopic(e, k, df));   // フレーズ一致は同じカテゴリだけ（ブランド名が同じだけの別ニュースを防ぐ）
-    if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
+    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || (e.it.cat === k.it.cat && sharePhrase(e.p, k.p)) || sameTopic(e, k, df, rareDf));   // フレーズ一致は同じカテゴリだけ（ブランド名が同じだけの別ニュースを防ぐ）
+    if (same) {
+      same.it.dups = (same.it.dups || 0) + 1;
+      (same.it.merged = same.it.merged || []).push(e.it.title);   // ?debug=1 で確認用
+      continue;
+    }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
   }
@@ -573,8 +578,8 @@ export async function getCraftwaveData({ days, debug, sent } = {}) {
 
   // date：記事の公開日（日本時間の「11/5」形式）。週刊なのでLINEで表示できるように
   const md = (t) => new Date(t + 9 * 3600e3).toISOString().slice(5, 10).replace(/^0?(\d+)-0?(\d+)$/, '$1/$2');
-  return final.map(({ cat, title, url, source, pr, pub, score, why }) => ({
+  return final.map(({ cat, title, url, source, pr, pub, score, why, merged }) => ({
     cat, title, url, source, pr: !!pr, date: md(pub),
-    ...(debug ? { score, why } : {})          // ?debug=1 のときだけ点数の内訳を出す
+    ...(debug ? { score, why, merged } : {})          // ?debug=1 のときだけ点数の内訳を出す
   }));
 }
