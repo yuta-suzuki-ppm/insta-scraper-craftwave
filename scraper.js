@@ -168,7 +168,7 @@ const rssURL = q =>
 // 2026-11-13：「誕生」「登場」「限定」だけで新作に入っていた（WCBのホテル新棟など）ので、
 //   施設・会社の話題を先に判定し、新作は「ビールの商品だと分かる言葉」があるときだけにした
 const FACILITY = /ホテル|宿泊|客室|新棟|施設|工場|建設|着工|竣工|完成|リニューアル|改装/;
-const OPENING  = /オープン|開店|新店|開業|移転|出店|進出|グランドオープン/;
+const OPENING  = /オープン|開店|新店|開業|移転|出店|進出|グランドオープン|(醸造所|ブルワリー|ブリュワリー|タップルーム|ビアバー|ブルーパブ)[^、。]{0,6}(誕生|開設|新設)/;
 const CORP     = /受賞|金賞|銀賞|銅賞|審査会|決算|売上|出荷|業績|資金調達|クラファン|クラウドファンディング|買収|提携|設立|就任|社長|募集|求人|採用|閉店|休業|終了|値上げ|調査|ランキング/;
 const PRODUCT  = /発売|新商品|新作|新製品|リリース|販売開始|予約開始|缶|ボトル|樽|IPA|ラガー|エール|スタウト|ピルスナー|ヘイジー|セゾン|サワー|ポーター|ヴァイツェン|ホップ/i;
 
@@ -521,28 +521,37 @@ const sameTopic = (e, k, df, rareDf) => {
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
   const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title), n: normTitle(it.title), tk: topicTokens(it.title) }));
-  // 言葉ごとに、何本の記事に出てくるか（めったに出ない言葉ほど話題の決め手になる）
-  const df = new Map();
-  indexed.forEach(e => e.tk.forEach(w => df.set(w, (df.get(w) || 0) + 1)));
-  const rareDf = Math.max(3, Math.ceil(indexed.length * 0.05));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
     (catOrder.indexOf(x.it.cat) - catOrder.indexOf(y.it.cat)) ||
     (x.i - y.i)
   );
+  const absorb = (k, e) => {
+    k.it.dups = (k.it.dups || 0) + 1 + (e.it.dups || 0);              // 何社が書いたか数える
+    (k.it.merged = k.it.merged || []).push(e.it.title, ...(e.it.merged || []));   // ?debug=1 で確認用
+  };
 
+  // 1段目：URL・タイトルの似かた・固有名・共通フレーズでまとめる
   const seenUrl = new Set();
-  const kept = [];
+  const first = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || (e.it.cat === k.it.cat && sharePhrase(e.p, k.p)) || sameTopic(e, k, df, rareDf));   // フレーズ一致は同じカテゴリだけ（ブランド名が同じだけの別ニュースを防ぐ）
-    if (same) {
-      same.it.dups = (same.it.dups || 0) + 1;
-      (same.it.merged = same.it.merged || []).push(e.it.title);   // ?debug=1 で確認用
-      continue;
-    }   // 何社が書いたか数える
+    const same = first.find(k => isSimilar(e.g, k.g) || shareName(e, k) || (e.it.cat === k.it.cat && sharePhrase(e.p, k.p)));   // フレーズ一致は同じカテゴリだけ（ブランド名が同じだけの別ニュースを防ぐ）
+    if (same) { absorb(same, e); continue; }
     seenUrl.add(e.it.url);
+    first.push(e);
+  }
+
+  // 2段目：残った記事だけで「めったに出ない言葉」を数え直し、同じ話題をまとめる
+  //   （2026-11-13：転載コピーまで数えると、話題の言葉が「よく出る言葉」になってまとまらなかった）
+  const df = new Map();
+  first.forEach(e => e.tk.forEach(w => df.set(w, (df.get(w) || 0) + 1)));
+  const rareDf = Math.max(3, Math.ceil(first.length * 0.05));
+  const kept = [];
+  for (const e of first) {
+    const same = kept.find(k => sameTopic(e, k, df, rareDf));
+    if (same) { absorb(same, e); continue; }
     kept.push(e);
   }
   return kept.sort((x, y) => x.i - y.i).map(e => e.it);
