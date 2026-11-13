@@ -474,9 +474,37 @@ export function makeSentFilter(sent = []) {
   };
 }
 
+// 固有名も共通フレーズもない同じ話題を見つける（2026-11-13 追加）
+//   例：「仙台駅で東北17ブルワリーのホップビール販売」と「東北産ホップのビール、JR仙台駅に集結」
+//   一般的な言葉を外して単語（漢字2文字ずつ・カタカナ・英単語）に分け、
+//   同じカテゴリで 3語以上が一致し、そのうち2語以上が「その週の記事でめったに出ない言葉」なら同じ話題
+const TOPIC_STOP = /クラフトビール|ビール|ブルワリー|ブリュワリー|ブルーイング|醸造所|醸造|クラフト|エール|フェス|イベント|開催|発売|販売|限定|新作|登場|参加|集結|提供|オープン|情報|記念|今年|全国|日本|国産|使用|使った|公開|決定|期間|数量|brewery|brewing|beer|craft|20\d{2}/gi;
+export function topicTokens(title) {
+  const t = String(title).replace(/\s+[-－–|｜]\s+[^-－–|｜]+$/, '')
+    .replace(/[０-９Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .toLowerCase().replace(TOPIC_STOP, ' ');
+  const out = new Set();
+  for (const m of t.matchAll(/[一-龠々]{2,}|[ァ-ヶー]{3,}|[a-z]{3,}/g)) {
+    const w = m[0];
+    if (/^[一-龠々]+$/.test(w) && w.length >= 3) {
+      for (let i = 0; i + 2 <= w.length; i++) out.add(w.slice(i, i + 2));   // 仙台駅 → 仙台・台駅
+    } else out.add(w);
+  }
+  return out;
+}
+const RARE_DF = 3;
+const sameTopic = (e, k, df) => {
+  if (e.it.cat !== k.it.cat) return false;
+  const shared = [...e.tk].filter(w => k.tk.has(w));
+  return shared.length >= 3 && shared.filter(w => (df.get(w) || 0) <= RARE_DF).length >= 2;
+};
+
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
-  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title), n: normTitle(it.title) }));
+  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title), n: normTitle(it.title), tk: topicTokens(it.title) }));
+  // 言葉ごとに、何本の記事に出てくるか（めったに出ない言葉ほど話題の決め手になる）
+  const df = new Map();
+  indexed.forEach(e => e.tk.forEach(w => df.set(w, (df.get(w) || 0) + 1)));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
@@ -488,7 +516,7 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || sharePhrase(e.p, k.p));
+    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e, k) || (e.it.cat === k.it.cat && sharePhrase(e.p, k.p)) || sameTopic(e, k, df));   // フレーズ一致は同じカテゴリだけ（ブランド名が同じだけの別ニュースを防ぐ）
     if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
