@@ -461,6 +461,19 @@ export const sharePhrase = (a, b, min = 10) => {
   return false;
 };
 
+// 配信済みの記事と同じ話題かどうか（URLが同じ、または重複判定と同じルールで似ている）
+//   sent: [{ title, url }]（GAS が記録している過去の配信分）
+export function makeSentFilter(sent = []) {
+  const keyOf = (title) => ({ g: bigrams(normTitle(title)), q: quotedNames(title), p: corePhrase(title), n: normTitle(title) });
+  const past = sent.filter(x => x && x.title).map(x => ({ url: x.url, ...keyOf(x.title) }));
+  const urls = new Set(sent.map(x => x && x.url).filter(Boolean));
+  return (item) => {
+    if (urls.has(item.url)) return true;
+    const e = keyOf(item.title);
+    return past.some(k => isSimilar(e.g, k.g) || shareName(e, k) || sharePhrase(e.p, k.p));
+  };
+}
+
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
   const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title), p: corePhrase(it.title), n: normTitle(it.title) }));
@@ -487,7 +500,7 @@ export function dedupe(items) {
 // ---------- 6) エントリーポイント（まとめて返す） ----------
 //
 // 厳選の優先度：ブルワリー公式 ＞ ニュース・専門サイト ＞ 転載・PR
-export async function getCraftwaveData({ days, debug } = {}) {
+export async function getCraftwaveData({ days, debug, sent } = {}) {
   const d = Number(days);
   windowDays = d >= 1 && d <= 30 ? Math.floor(d) : DEFAULT_DAYS;
   const results = [];
@@ -505,7 +518,10 @@ export async function getCraftwaveData({ days, debug } = {}) {
 
   // 重複をまとめ → 終わったイベントを外し → クラフトビールの濃さで点数をつける
   const now = Date.now();
+  // 配信済み（過去数週分）と同じ話題は外す → 空いた枠には次点の記事が入る
+  const wasSent = makeSentFilter(Array.isArray(sent) ? sent.slice(0, 300) : []);
   const scored = dedupe(results)
+    .filter(x => !wasSent(x))
     .filter(x => !isFinishedEvent(x, now))
     .map(x => ({ ...x, ...scoreItem(x) }));
   const byScore = (a, b) => (b.score - a.score) || (b.pub - a.pub);   // 同点なら新しい順
