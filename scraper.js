@@ -432,9 +432,24 @@ const isSimilar = (a, b) => {
   return hit / n >= 0.8;
 };
 
+// 「」『』で囲まれた固有名（イベント名・作品名・商品名）を取り出す
+//   言い回しが違っても同じ名前が入っていれば同じ話題とみなす（2026-11-13 追加）
+//   例：『幸せカナコの殺し屋生活』、「小田原・箱根 クラフトビールフェス 2026」
+//   「クラフトビールフェス」のような一般的な言葉だけの名前は使わない
+const GENERIC_WORDS = /クラフトビール|クラフト|ビール|ビア|フェスティバル|フェス|イベント|祭り|祭|まつり|開催|限定|新作|20\d{2}|in|the/gi;
+export const quotedNames = (t) => {
+  const out = new Set();
+  for (const m of String(t).matchAll(/[「『｢]([^」』｣]{4,40})[」』｣]/g)) {
+    const name = m[1].replace(/[\s　・･\-－–~〜!！?？]/g, '').toLowerCase();
+    if (name.replace(GENERIC_WORDS, '').length >= 3) out.add(name);
+  }
+  return out;
+};
+const shareName = (a, b) => [...a].some(x => b.has(x));
+
 export function dedupe(items) {
   const catOrder = Object.keys(categories);
-  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)) }));
+  const indexed = items.map((it, i) => ({ it, i, g: bigrams(normTitle(it.title)), q: quotedNames(it.title) }));
   const order = indexed.slice().sort((x, y) =>
     (Number(!!x.it.repost) - Number(!!y.it.repost)) ||
     (Number(!!x.it.pr) - Number(!!y.it.pr)) ||       // 同じ話題なら報道記事を PR より優先
@@ -446,7 +461,7 @@ export function dedupe(items) {
   const kept = [];
   for (const e of order) {
     if (seenUrl.has(e.it.url)) continue;
-    const same = kept.find(k => isSimilar(e.g, k.g));
+    const same = kept.find(k => isSimilar(e.g, k.g) || shareName(e.q, k.q));
     if (same) { same.it.dups = (same.it.dups || 0) + 1; continue; }   // 何社が書いたか数える
     seenUrl.add(e.it.url);
     kept.push(e);
